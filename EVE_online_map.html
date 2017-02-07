@@ -1,0 +1,711 @@
+<html>
+
+<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.10.1/jquery.js"></script>
+
+<ul class='custom-menu'>
+
+</ul>
+<head>
+	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+</head>
+<style media="screen" type="text/css">
+/* CSS3 */
+
+/* The whole thing */
+.custom-menu {
+    display: none;
+    z-index: 1000;
+    position: absolute;
+    overflow: hidden;
+    border: 1px solid #CCC;
+    white-space: nowrap;
+    font-family: sans-serif;
+    background: #FFF;
+    color: #333;
+    border-radius: 5px;
+    padding: 0;
+}
+
+/* Each of the items in the list */
+.custom-menu li {
+    padding: 8px 12px;
+    cursor: pointer;
+    list-style-type: none;
+    transition: all .3s ease;
+}
+
+.custom-menu li:hover {
+    background-color: #DEF;
+}
+</style>
+<body>
+
+
+
+
+
+<svg height="1200" width="1200">
+
+</svg>
+<hr><a id="download">Download</a><br>
+
+
+<script>
+
+
+const CENTER_X = 400;
+const CENTER_Y = 400;
+const SYSTEM_RX = 70;
+const SYSTEM_RY = 30;
+const SYSTEM_FILL = "yellow";
+const SYSTEM_STROKE = "purple";
+const SYSTEM_STROKE_WIDTH = 2;
+const SYSTEM_FONT_FAMILY = "Verdana";
+const SYSTEM_FONT_SIZE = 18;
+const SYSTEM_FONT_FILL = "black";
+const CONNECTION_STROKE = "blue";
+const CONNECTION_STROKE_WIDTH = 3;
+var pathStartedFlag = 0;
+
+
+crestSystemStubs = null; // The system list retrieved from the CREST API. Only contains minimal system information.
+systems = {};
+connections = {};
+
+
+
+
+addNewSystem = function(selectedName){crestGet("https://crest-tq.eveonline.com/solarsystems/", function(crestObj)
+	{
+		console.log(crestObj);
+		crestSystemStubs = crestObj.items;
+		
+		// Search systems for Chosen
+		for (var i = 0; i < crestSystemStubs.length; i++)
+		{
+			if (crestSystemStubs[i].name == selectedName)
+			{
+				// Get chosen system
+				crestGet(crestSystemStubs[i].href, function(crestChosen)
+				{
+					console.log(crestChosen);
+					
+					if(crestChosen.name in systems)
+					{
+						alert("system already present");
+						return;
+					}
+					
+					// Add Chosen to global system array
+					var Chosen = new System(crestChosen);
+					systems[Chosen.id] = Chosen;
+					
+					// For each stargate in Chosen...
+					for (var j = 0; j < Chosen.crest.stargates.length; j++)
+					{
+					
+
+						// Get the destination system (neighbor)
+						var neighborStub = getStargateDestStub(Chosen.crest.stargates[j].name);
+						crestGet(neighborStub.href, function(crestNeighbor)
+						{
+							console.log(crestNeighbor);
+							
+							// Add neighbor to global system array
+							if(!(crestNeighbor.name in systems))
+							{
+								//var neighbor = new System(crestNeighbor);
+								//systems[neighbor.id] = neighbor;
+							}
+							else
+							{
+								var neighbor = systems[crestNeighbor.name];
+								
+								
+								// Connect Chosen to neighbor
+								Chosen.connectTo(neighbor);
+								
+								// Connect neighbor to its neighbors (if they're in the map)
+								for (var k = 0; k < neighbor.crest.stargates.length; k++)
+								{
+									var neighbor2Stub = getStargateDestStub(neighbor.crest.stargates[k].name);
+									var neighbor2Id = neighbor2Stub.name;
+									if (neighbor2Id in systems)
+									{
+										neighbor.connectTo(systems[neighbor2Id]);
+									}
+								}
+							}
+						
+						});
+					}
+				});
+			}
+		}
+	});
+}
+
+
+
+
+
+
+
+var startSystem;
+var endSystem;
+clickMenu =  function(){
+//alert("asdfasdf");
+	$(".custom-menu li").click(function(){
+   
+	// This is the triggered action name
+		var selectedName = $(this).attr("data-action") ;
+		if(selectedName=="start")
+		{
+			pathStartedFlag=1;
+			startSystem=selectedSystem;
+			
+			// Unhighlight all connections
+			for (var id in connections)
+			{
+				if (connections.hasOwnProperty(id))
+				{
+					var path = connections[id].view;
+					path.setAttribute("stroke", CONNECTION_STROKE);
+					path.setAttribute("stroke-width", CONNECTION_STROKE_WIDTH);
+				}
+			}
+		}
+		else if(selectedName=="end")
+		{
+			pathStartedFlag=0;
+			endSystem = selectedSystem;
+			//alert("start: "+startSystem.id+" end: "+endSystem.id)
+			
+			// Find shortest route
+			var route = shortestRoute(startSystem, endSystem);
+			
+			if (route === null)
+			{
+				alert("Route not found.");
+			}
+			else
+			{
+				// Highlight each path along the route
+				for (var i = 0; i < route.length; i++)
+				{
+					var path = route[i].view;
+					path.setAttribute("stroke", "green");
+					path.setAttribute("stroke-width", CONNECTION_STROKE_WIDTH + 4);
+				}
+				
+				alert("Traveling from " + startSystem.id + " to " + endSystem.id + " takes "
+					  + route.length + " jumps.");
+			}
+		}
+		else
+		{
+			addNewSystem(selectedName);
+		}
+
+  
+		// Hide it AFTER the action was triggered
+	$(".custom-menu").hide(100);
+	});
+	}
+
+
+System = function(crestObj)
+{
+	this.id = crestObj.name; // Matches the id of the SVG ellipse
+	this.x = CENTER_X;
+	this.y = CENTER_Y;
+	this.crest = crestObj;
+	this.connections = [];
+	
+	// Draw ellipse for the first time
+	var ellipse = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+	ellipse.setAttribute("id", this.id);
+	ellipse.setAttribute("cx", this.x);
+	ellipse.setAttribute("cy", this.y);
+	ellipse.setAttribute("rx", SYSTEM_RX);
+	ellipse.setAttribute("ry", SYSTEM_RY);
+	ellipse.setAttribute("fill", SYSTEM_FILL);
+	ellipse.setAttribute("stroke", SYSTEM_STROKE);
+	ellipse.setAttribute("stroke-width", SYSTEM_STROKE_WIDTH);
+	
+	// Draw text for the first time
+	var text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+	text.setAttribute("id", this.id);
+	text.setAttribute("x", this.x);
+	text.setAttribute("y", this.y);
+	text.setAttribute("text-anchor", "middle");
+	text.setAttribute("font-family", SYSTEM_FONT_FAMILY);
+	text.setAttribute("font-size", SYSTEM_FONT_SIZE);
+	text.setAttribute("fill", SYSTEM_FONT_FILL);
+	text.textContent = this.id;
+	
+	//attach rightClick handler
+	var menuHandler = function (event) {
+    
+		// Avoid the default right click menu
+		event.preventDefault();
+
+		//set origin or destination for pathfinding 
+		$("li").remove();
+		if(pathStartedFlag===0)
+		{
+			$("ul.custom-menu").append('<li data-action="'+'start'+'">'+'set as origin of path'+'</li>');
+		}else{
+			$("ul.custom-menu").append('<li data-action="'+'end'+'">'+'set as end of path'+'</li>');
+		}
+		
+		var selectedName = $(this).attr("id");
+		
+		selectedSystem = systems[selectedName];
+		crestChosen = selectedSystem.crest;
+		
+		
+
+
+						
+		// For each stargate in Chosen...
+		for (var j = 0; j < crestChosen.stargates.length; j++)
+		{
+			// Get the destination system (neighbor)
+			var crestNeighbor = getStargateDestStub(crestChosen.stargates[j].name);
+				if(!(crestNeighbor.name in systems))
+				{
+			
+					console.log(crestNeighbor);
+					$("ul.custom-menu").append('<li data-action="'+crestNeighbor.name+'">'+crestNeighbor.name+'</li>');
+				
+				}
+		
+		}
+	
+		setTimeout(clickMenu, 100);
+		
+		
+		
+		
+
+		
+		
+		// Show contextmenu
+		$(".custom-menu").finish().toggle(100).
+		
+		// In the right position (the mouse)
+		css({
+			top: event.pageY + "px",
+			left: event.pageX + "px"
+		});
+	}
+
+	
+	
+	// Attach event handlers
+	var handler = function(e)
+	{
+		e.preventDefault(); // Prevent highlighting text
+		
+		var obj = $(this);
+		var sys = systems[obj.attr("id")];
+		
+		$("svg").mousemove(function(e)
+		{
+			e.preventDefault(); // Prevent highlighting text
+			sys.updateView(e.pageX, e.pageY);
+		});
+		
+		$("svg").mouseup(function(e)
+		{
+			$(this).off("mousemove");
+		});
+	};
+	ellipse.addEventListener("mousedown", handler);
+	text.addEventListener("mousedown", handler);
+	
+	ellipse.addEventListener("contextmenu", menuHandler);
+	text.addEventListener("contextmenu", menuHandler);
+	
+	$("svg").append(ellipse);
+	$("svg").append(text);
+	
+	this.view =
+	{
+		ellipse: ellipse,
+		text: text
+	};
+};
+
+//connects the system to another given system
+System.prototype.connectTo = function(sys2)
+{
+	// Don't do anything if the connection already exists
+	if (this.id + sys2.id in connections || sys2.id + this.id in connections)
+		return;
+	
+	conn = new Connection(this, sys2);
+	this.connections.push(conn);
+	sys2.connections.push(conn);
+	
+	// Add new connection to global connection array
+	connections[conn.id] = conn;
+	
+	// Redraw ellipses and text on top
+	$("svg").append(this.view.ellipse);
+	$("svg").append(this.view.text);
+	$("svg").append(sys2.view.ellipse);
+	$("svg").append(sys2.view.text);
+};
+
+
+System.prototype.updateView = function(x, y)
+{
+	// Update model
+	this.x = x;
+	this.y = y;
+	
+	// Update ellipse
+	this.view.ellipse.setAttribute("cx", x);
+	this.view.ellipse.setAttribute("cy", y);
+	
+	// Update text
+	this.view.text.setAttribute("x", x);
+	this.view.text.setAttribute("y", y);
+	
+	// Update each line
+	for (var i = 0; i < this.connections.length; i++)
+	{
+		this.connections[i].updateView();
+	}
+};
+
+//represents a connection between two systems
+Connection = function(sys1, sys2)
+{
+	this.id = sys1.id + sys2.id;
+	this.sys1 = sys1;
+	this.sys2 = sys2;
+	this.conPoint1X = 0;
+	this.conPoint1Y = 0;
+	this.conPoint2X = 0;
+	this.conPoint2Y = 0;
+	
+	
+	//bending a path can be done from two different points, this allows the user to bend the path from point 1
+	var connectionHandler1 = function(e)
+	{
+		e.preventDefault(); // Prevent highlighting text
+		
+		var obj = $(this);
+		var con = connections[obj.attr("id")];
+		
+		$("svg").mousemove(function(e)
+		{
+			e.preventDefault(); // Prevent highlighting text
+			
+			//set svg path between the systems, this allows for path bending
+			con.view.setAttribute("d", "M " + con.sys1.x + " " + con.sys1.y + " C " + e.pageX + " " + e.pageY + " " + (con.conPoint2X+con.sys2.x)+ " " + (con.conPoint2Y+con.sys2.y) + " " + sys2.x + " " + sys2.y);
+			
+			//the handles for path bending, they are relative to the location of the system.
+			con.conPoint1X=e.pageX-con.sys1.x;
+			con.conPoint1Y=e.pageY-con.sys1.y;
+			
+			obj.attr("cx",e.pageX-7);
+			obj.attr("cy",e.pageY-5);
+		});
+		
+		$("svg").mouseup(function(e)
+		{
+			$(this).off("mousemove");
+			
+		});
+	};
+	
+	//handles bending the path from the second point
+	var connectionHandler2 = function(e)
+	{
+		e.preventDefault(); // Prevent highlighting text
+		
+		var obj = $(this);
+		var con = connections[obj.attr("id")];
+		
+		$("svg").mousemove(function(e)
+		{
+			e.preventDefault(); // Prevent highlighting text
+			con.view.setAttribute("d", "M " + con.sys1.x + " " + con.sys1.y + " C " + (con.conPoint1X+con.sys1.x) + " " + (con.conPoint1Y+con.sys1.y) + " " + e.pageX + " " + e.pageY + " " + sys2.x + " " + sys2.y);
+			
+			con.conPoint2X=e.pageX-con.sys2.x;
+			con.conPoint2Y=e.pageY-con.sys2.y;
+			obj.attr("cx",e.pageX-7);
+			obj.attr("cy",e.pageY-5);
+		});
+		
+		$("svg").mouseup(function(e)
+		{
+			$(this).off("mousemove");
+			
+		});
+	};	
+	
+	// Draw path for the first time
+	var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+	path.setAttribute("id", this.id);
+	path.setAttribute("d", "M " + sys1.x + " " + sys1.y + " L " + sys2.x + " " + sys2.y);
+	path.setAttribute("stroke", CONNECTION_STROKE);
+	path.setAttribute("stroke-width", CONNECTION_STROKE_WIDTH);
+	path.setAttribute("fill", "none");
+	$("svg").append(path);
+	this.view = path;
+	
+	path.addEventListener("click",function(e){
+		e.preventDefault(); // Prevent highlighting text
+		
+		var obj = $(this);
+		var con = connections[obj.attr("id")];
+		
+		//visual representations for the path bending handles
+		var circle1 = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+		circle1.setAttribute("id",con.id);
+		circle1.setAttribute("cx",con.conPoint1X+con.sys1.x);
+		circle1.setAttribute("cy",con.conPoint1Y+con.sys1.y);
+		circle1.setAttribute("r",10);
+		$("svg").append(circle1);
+		
+		circle1.addEventListener("mousedown",connectionHandler1);
+		
+		var circle2 = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+		circle2.setAttribute("id",con.id);
+		circle2.setAttribute("cx",con.conPoint2X+con.sys2.x);
+		circle2.setAttribute("cy",con.conPoint2Y+con.sys2.y);
+		circle2.setAttribute("r",10);
+		$("svg").append(circle2);
+		
+		circle2.addEventListener("mousedown",connectionHandler2);
+
+	});
+	
+
+};
+Connection.prototype.updateView = function()
+{
+	
+	// Update the path
+	this.view.setAttribute("d", "M " + this.sys1.x + " " + this.sys1.y + " C " + (this.conPoint1X+this.sys1.x) + " " + (this.conPoint1Y+this.sys1.y) + " " + (this.conPoint2X+this.sys2.x) + " " + (this.conPoint2Y+this.sys2.y) + " " + this.sys2.x + " " + this.sys2.y);
+	
+};
+
+//gets system information from the EVEonline api CREST
+function crestGet(url, successFunc, errorFunc)
+{
+	$.ajax(
+	{
+		type: "GET",
+		url: url,
+		headers:
+		{
+			"Accept": "application/vnd.ccp.eve.Api-v3+json",
+			"Content-Type": "application/vnd.ccp.eve.Api-v3+json; charset=utf-8"
+		},
+		success: successFunc,
+		error: errorFunc
+	});
+}
+
+function crestGetAllSystems(successFunc, errorFunc)
+{
+	crestGet("https://crest-tq.eveonline.com/solarsystems/", successFunc, errorFunc);
+}
+
+function crestGetSystem(systemId, successFunc, errorFunc)
+{
+	crestGet("https://crest-tq.eveonline.com/solarsystems/" + systemId + "/", successFunc, errorFunc);
+}
+
+// Finds the the stargate destination system in the crestSystemStubs.
+function getStargateDestStub(stargateName)
+{
+	var dest = stargateName.substring(10, stargateName.length - 1)
+	
+	for (var i = 0; i < crestSystemStubs.length; i++)
+	{
+		if (crestSystemStubs[i].name == dest)
+			return crestSystemStubs[i];
+	}
+	return null;
+}
+
+// Uses a breadth-first search to find the shortest path between two systems.
+function shortestRoute(source, destination)
+{
+	// Initialize system info for the search
+	for (var id in systems)
+	{
+		if (systems.hasOwnProperty(id))
+		{
+			systems[id].distance = -1;
+			systems[id].parent = null;
+			systems[id].parentConn = null;
+		}
+	}
+	
+	var queue = [];
+	
+	source.distance = 0;
+	queue.push(source);
+	
+	while (queue.length > 0)
+	{
+		var current = queue.shift();
+		for (var i = 0; i < current.connections.length; i++)
+		{
+			var conn = current.connections[i];
+			var adjacent = conn.sys1 === current ? conn.sys2 : conn.sys1;
+			if (adjacent.distance === -1)
+			{
+				adjacent.distance = current.distance + 1;
+				adjacent.parent = current;
+				adjacent.parentConn = conn;
+				
+				if (adjacent === destination)
+				{
+					// Found the destination; output a list of connections used
+					var route = [];
+					var current2 = destination;
+					do
+					{
+						route.unshift(current2.parentConn);
+						current2 = current2.parent;
+					}
+					while (current2 !== source);
+					
+					return route;
+				}
+				
+				queue.push(adjacent);
+			}
+		}
+	}
+	
+	return null;
+}
+
+$(document).ready(function()
+{
+	// File saving
+	$("#download").attr('href-lang', 'image/svg+xml')
+				  .attr('href', 'data:image/svg+xml;utf8,' +  unescape($('svg')[0].outerHTML))
+			      .mousedown(function(e)
+	{
+		if (e.which == 3)
+		{
+			$(this).attr('href-lang', 'image/svg+xml')
+				   .attr('href', 'data:image/svg+xml;utf8,' +  unescape($('svg')[0].outerHTML));
+		}
+		else
+		{
+			e.preventDefault();
+			alert("To download, right-click the link and select 'Save link as...'");
+		}
+	});
+	
+	$("svg").mousedown(function(e)
+	{
+		e.preventDefault(); // Prevent highlighting text
+	});
+	
+	// Get the list of all systems
+	crestGet("https://crest-tq.eveonline.com/solarsystems/", function(crestObj)
+	{
+		console.log(crestObj);
+		crestSystemStubs = crestObj.items;
+		
+		// Search systems for Jita
+		for (var i = 0; i < crestSystemStubs.length; i++)
+		{
+			if (crestSystemStubs[i].name == "Jita")
+			{
+				// Get Jita system
+				crestGet(crestSystemStubs[i].href, function(crestJita)
+				{
+					console.log(crestJita);
+					
+					// Add Jita to global system array
+					var jita = new System(crestJita);
+					systems[jita.id] = jita;
+					
+					// For each stargate in Jita...
+					for (var j = 0; j < jita.crest.stargates.length; j++)
+					{
+						// Get the destination system (neighbor)
+						var neighborStub = getStargateDestStub(jita.crest.stargates[j].name);
+						crestGet(neighborStub.href, function(crestNeighbor)
+						{
+							console.log(crestNeighbor);
+							
+							// Add neighbor to global system array
+							var neighbor = new System(crestNeighbor);
+							systems[neighbor.id] = neighbor;
+							
+							// Connect Jita to neighbor
+							jita.connectTo(neighbor);
+							
+							// Connect neighbor to its neighbors (if they're in the map)
+							for (var k = 0; k < neighbor.crest.stargates.length; k++)
+							{
+								var neighbor2Stub = getStargateDestStub(neighbor.crest.stargates[k].name);
+								var neighbor2Id = neighbor2Stub.name;
+								if (neighbor2Id in systems)
+								{
+									neighbor.connectTo(systems[neighbor2Id]);
+								}
+							}
+						});
+					}
+				});
+			}
+		}
+	});
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	// JAVASCRIPT (jQuery)//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Trigger action when the contexmenu is about to be shown
+
+
+// If the document is clicked somewhere
+$(document).bind("mousedown", function (e) {
+    
+    // If the clicked element is not the menu
+    if (!$(e.target).parents(".custom-menu").length > 0) {
+        
+        // Hide it
+        $(".custom-menu").hide(100);
+    }
+	// If the clicked element is not the menu
+	if (!(e.target.localName==="circle")) {
+       
+		// Hide it
+		$("circle").remove();
+	}		
+	
+});
+
+
+// If the menu element is clicked
+
+	
+});
+
+</script>
+
+</body>
+</html>
